@@ -6,6 +6,7 @@ DocMeta.setdocmeta!(NCPseudoGen, :DocTestSetup, :(using NCPseudoGen); recursive 
 # Add titles of sections and overrides page titles
 const titles = Dict(
     # "10-tutorials" => "Tutorials", # example folder title
+    "numerov.md" => "Numerov Method",
     "91-developer.md" => "Developer docs",
 )
 
