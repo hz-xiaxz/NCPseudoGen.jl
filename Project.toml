@@ -1,0 +1,10 @@
+name = "NCPseudoGen"
+uuid = "d223997f-89d2-5956-bc8f-a0eaec0594e6"
+authors = ["xuanzhe xia <hzxiaxz@gmail.com>"]
+version = "0.1.0"
+
+[workspace]
+projects = ["test", "docs"]
+
+[compat]
+julia = "1.10"
