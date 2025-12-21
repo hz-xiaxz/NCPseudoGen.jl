@@ -4,9 +4,13 @@
 *.rej
 .DS_Store
 .benchmarkci
-Manifest.toml
+Manifest*.toml
 benchmark/*.json
 coverage
 docs/build/
 env
 node_modules
+
+# Debug scripts
+debug_*.jl
+scripts/
