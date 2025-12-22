@@ -7,6 +7,7 @@
 
 using LinearAlgebra
 using FiniteDifferences: central_fdm
+using TaylorSeries: Taylor1, getcoeff
 
 # ============================================================================
 # Finite Difference Utilities
@@ -51,6 +52,45 @@ function fd_derivative(data::Vector{Float64}, i::Int, δ::Float64, order::Int=1;
     # Apply stencil: f^(n)(x) ≈ Σ c_k * f[i + g_k] / δ^n
     result = sum(c[k] * data[i + Int(g[k])] for k in eachindex(g))
     return result / δ^order
+end
+
+# ============================================================================
+# TM Polynomial Matrix Construction (using TaylorSeries.jl)
+# ============================================================================
+
+"""
+    build_tm_matrix(rc, exponents, n_derivs)
+
+Build matching matrix for TM polynomial using TaylorSeries.jl.
+
+The TM polynomial is: p(r) = Σ c_n * r^n for n in exponents.
+This function computes the matrix A where A[k+1, j] = d^k/dr^k[r^n] at r=rc.
+
+Using TaylorSeries: expand (rc + δr)^n, coefficients give scaled derivatives.
+
+# Arguments
+- `rc`: Cutoff radius (matching point)
+- `exponents`: Powers of r in the polynomial (e.g., [0, 2, 4, 6, 8, 10, 12])
+- `n_derivs`: Number of derivatives needed (including 0th = value)
+
+# Returns
+- Matrix A where row k corresponds to k-th derivative, column j to exponent[j]
+"""
+function build_tm_matrix(rc::Float64, exponents::Vector{Int}, n_derivs::Int)
+    A = zeros(n_derivs, length(exponents))
+
+    for (j, n) in enumerate(exponents)
+        # Expand r^n around rc using Taylor series
+        r = Taylor1(Float64, n_derivs - 1)
+        p = (rc + r)^n
+
+        for k in 0:n_derivs-1
+            # Coefficient of r^k = f^(k)(rc) / k!
+            A[k+1, j] = getcoeff(p, k) * factorial(k)
+        end
+    end
+
+    return A
 end
 
 # ============================================================================
@@ -392,61 +432,44 @@ end
     solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c, norm_ae_sq, grid, i_c)
 
 Solve for TM polynomial coefficients using Newton iteration.
+
+Uses TaylorSeries.jl for automatic derivative computation of the matching matrix.
 """
 function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
                                 norm_ae_sq, grid, i_c)
     # For s-states (l=0): p''(0) ≈ -E/3 for finite V at origin
     # For l>0: p''(0) = 0 is often used
-
-    # Set c₂ based on curvature condition
     if l == 0
         c2_init = -E / 3.0
     else
         c2_init = 0.0
     end
 
-    rc2 = rc^2
-    rc4 = rc^4
-    rc6 = rc^6
-    rc8 = rc^8
-    rc10 = rc^10
-    rc12 = rc^12
+    # Build full matching matrix using TaylorSeries.jl
+    # TM polynomial: p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
+    exponents = [0, 2, 4, 6, 8, 10, 12]
+    A_full = build_tm_matrix(rc, exponents, 5)  # 5 derivatives (p through p'''')
 
-    # Matching conditions at rc form linear system for [c₀, c₄, c₆, c₈, c₁₀, c₁₂]
-    # given fixed c₂
+    # Matching conditions: p(rc)=f_c, p'(rc)=fp_c, etc.
+    # We fix c₂ and solve for [c₀, c₄, c₆, c₈, c₁₀, c₁₂]
 
-    # Use Newton iteration on c₀ to satisfy norm conservation
-    # For each c₀, solve the linear system for remaining coefficients
+    # Extract submatrix: columns for [c₀, c₄, c₆, c₈, c₁₀, c₁₂] (indices 1,3,4,5,6,7)
+    # But we use Newton iteration on c₀ for norm conservation
+
+    # Column for c₂ contributions
+    c2_col = A_full[:, 2]  # derivatives of r² at rc
 
     function compute_norm(c0, c2)
-        # Solve linear system for c₄, c₆, c₈, c₁₀, c₁₂ given c₀, c₂
-        #
-        # p(rc) = c₀ + c₂*rc² + c₄*rc⁴ + c₆*rc⁶ + c₈*rc⁸ + c₁₀*rc¹⁰ + c₁₂*rc¹² = f_c
-        # p'(rc) = 2c₂*rc + 4c₄*rc³ + 6c₆*rc⁵ + 8c₈*rc⁷ + 10c₁₀*rc⁹ + 12c₁₂*rc¹¹ = fp_c
-        # etc.
+        # RHS after subtracting c₀ and c₂ contributions
+        rhs = [f_c, fp_c, fpp_c, fppp_c, fpppp_c] .- c0 .* A_full[:, 1] .- c2 .* c2_col
 
-        # Subtract known c₀, c₂ contributions
-        rhs = [
-            f_c - c0 - c2*rc2,
-            fp_c - 2*c2*rc,
-            fpp_c - 2*c2,
-            fppp_c,
-            fpppp_c
-        ]
-
-        # Matrix for [c₄, c₆, c₈, c₁₀, c₁₂]
-        A = [
-            rc4    rc6    rc8    rc10    rc12;
-            4*rc^3  6*rc^5  8*rc^7  10*rc^9  12*rc^11;
-            12*rc2  30*rc4  56*rc6  90*rc8   132*rc10;
-            24*rc   120*rc^3 336*rc^5 720*rc^7 1320*rc^9;
-            24      360*rc2  1680*rc4 5040*rc6 11880*rc8
-        ]
-
-        c_rest = A \ rhs
+        # Solve for [c₄, c₆, c₈, c₁₀, c₁₂] using columns 3-7
+        A_reduced = A_full[:, 3:7]
+        c_rest = A_reduced \ rhs
         c4, c6, c8, c10, c12 = c_rest
 
         # Compute norm of pseudo-wavefunction from 0 to rc
+        # u_ps(r) = r^(l+1) * exp(p(r))
         norm_ps_sq = 0.0
         δ = grid.δ
         for i in 1:i_c-1
@@ -462,8 +485,8 @@ function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
         return norm_ps_sq, [c0, c2, c4, c6, c8, c10, c12]
     end
 
-    # Newton iteration on c₀
-    c0 = f_c - c2_init * rc2  # Initial guess from p(rc) ≈ c₀ + c₂rc²
+    # Newton iteration on c₀ to satisfy norm conservation
+    c0 = f_c - c2_init * rc^2  # Initial guess
     c2 = c2_init
 
     tol = 1e-12
@@ -471,14 +494,13 @@ function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
 
     for iter in 1:max_iter
         norm_ps, c = compute_norm(c0, c2)
-
         delta_norm = norm_ps - norm_ae_sq
 
         if abs(delta_norm) < tol * norm_ae_sq
             return c
         end
 
-        # Numerical derivative of norm with respect to c₀
+        # Numerical derivative of norm w.r.t. c₀
         dc0 = 1e-6
         norm_ps_plus, _ = compute_norm(c0 + dc0, c2)
         d_norm_dc0 = (norm_ps_plus - norm_ps) / dc0

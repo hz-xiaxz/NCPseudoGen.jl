@@ -402,3 +402,47 @@ The sign error fix dramatically improved log-derivative matching and eliminated 
 
 ### Files Changed
 - `src/ncpp.jl`: Added `fd_derivative()`, updated all FD calls
+
+---
+
+## TaylorSeries.jl for TM Matrix Construction (2024-12)
+
+### Problem
+The TM polynomial matching matrix contained manually computed derivative coefficients:
+```julia
+# Error-prone manual entries like:
+A = [
+    rc4    rc6    rc8    rc10    rc12;
+    4*rc^3  6*rc^5  8*rc^7  10*rc^9  12*rc^11;
+    12*rc2  30*rc4  56*rc6  90*rc8   132*rc10;  # Easy to make typos!
+    24*rc   120*rc^3 336*rc^5 720*rc^7 1320*rc^9;
+    24      360*rc2  1680*rc4 5040*rc6 11880*rc8
+]
+```
+
+These coefficients are derivatives of r^n (e.g., d⁴/dr⁴[r¹²] = 11880*r⁸) computed by hand.
+
+### Solution: TaylorSeries.jl
+Use Taylor expansion around rc to automatically compute all derivatives:
+```julia
+function build_tm_matrix(rc::Float64, exponents::Vector{Int}, n_derivs::Int)
+    A = zeros(n_derivs, length(exponents))
+    for (j, n) in enumerate(exponents)
+        r = Taylor1(Float64, n_derivs - 1)
+        p = (rc + r)^n  # Taylor expand r^n around rc
+        for k in 0:n_derivs-1
+            A[k+1, j] = getcoeff(p, k) * factorial(k)  # Extract d^k/dr^k
+        end
+    end
+    return A
+end
+```
+
+### Benefits
+1. **No manual derivative computation** - TaylorSeries.jl handles it automatically
+2. **Impossible to make typos** - coefficients computed symbolically
+3. **Easy to extend** - just change `exponents` or `n_derivs`
+4. **Self-documenting** - the code shows exactly what's being computed
+
+### Files Changed
+- `src/ncpp.jl`: Added `build_tm_matrix()`, refactored `solve_tm_coefficients()`
