@@ -6,6 +6,7 @@
 # ============================================================================
 
 using LinearAlgebra
+using FiniteDifferences
 
 # ============================================================================
 # Data Structures
@@ -168,7 +169,66 @@ end
 # ============================================================================
 
 """
-    troullier_martins_pswf(grid, u_ae, E, l, rc)
+    compute_derivatives_at_rc(grid, u_ae, V_eff, E, l, i_c)
+
+Compute u and its derivatives at r_c using Schrödinger equation.
+
+Instead of computing high-order finite differences (unstable), we use:
+    u'' = g(r) * u   where g(r) = 2(V - E) + l(l+1)/r²
+    u''' = g' * u + g * u'
+    u'''' = g'' * u + 2g' * u' + g * u''
+
+This only requires first derivative of u (stable) and derivatives of g (smooth).
+
+# Returns
+- `(u, u', u'', u''', u'''')` at r_c in r-space
+"""
+function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
+                                    V_eff::Vector{Float64}, E::Float64,
+                                    l::Int, i_c::Int)
+    r_c = grid.r[i_c]
+    δ = grid.δ
+
+    # Value at r_c
+    u = u_ae[i_c]
+
+    # First derivative using central difference (5-point stencil in x-space)
+    du_dx = (-u_ae[i_c-2] + 8*u_ae[i_c-1] - 8*u_ae[i_c+1] + u_ae[i_c+2]) / (12 * δ)
+    rp_c = grid.rp[i_c]
+    du_dr = du_dx / rp_c
+
+    # g(r) = 2(V - E) + l(l+1)/r² from Schrödinger equation
+    g_c = 2*(V_eff[i_c] - E) + l*(l+1)/r_c^2
+
+    # Second derivative from SE: u'' = g * u
+    d2u_dr2 = g_c * u
+
+    # For g' and g'', compute derivatives of g(r) = 2(V - E) + l(l+1)/r²
+    # g'(r) = 2V'(r) - 2l(l+1)/r³
+    # g''(r) = 2V''(r) + 6l(l+1)/r⁴
+
+    # Derivative of V using finite differences
+    dV_dx = (-V_eff[i_c-2] + 8*V_eff[i_c-1] - 8*V_eff[i_c+1] + V_eff[i_c+2]) / (12 * δ)
+    dV_dr = dV_dx / rp_c
+
+    d2V_dx2 = (-V_eff[i_c-2] + 16*V_eff[i_c-1] - 30*V_eff[i_c] +
+               16*V_eff[i_c+1] - V_eff[i_c+2]) / (12 * δ^2)
+    d2V_dr2 = (d2V_dx2 - dV_dx) / rp_c^2
+
+    dg_dr = 2*dV_dr - 2*l*(l+1)/r_c^3
+    d2g_dr2 = 2*d2V_dr2 + 6*l*(l+1)/r_c^4
+
+    # Third derivative: u''' = g' * u + g * u'
+    d3u_dr3 = dg_dr * u + g_c * du_dr
+
+    # Fourth derivative: u'''' = g'' * u + 2g' * u' + g * u''
+    d4u_dr4 = d2g_dr2 * u + 2*dg_dr * du_dr + g_c * d2u_dr2
+
+    return u, du_dr, d2u_dr2, d3u_dr3, d4u_dr4
+end
+
+"""
+    troullier_martins_pswf(grid, u_ae, V_eff, E, l, rc)
 
 Generate Troullier-Martins pseudo-wavefunction.
 
@@ -179,11 +239,14 @@ Inside r_c, the pseudo-wavefunction has the form:
 The 7 coefficients are determined by:
 1-5. Continuity of u_ps, u_ps', u_ps'', u_ps''', u_ps'''' at r_c
 6.   Norm conservation: ∫₀^rc |u_ps|² dr = ∫₀^rc |u_ae|² dr
-7.   Zero curvature at origin: p''(0) = 0 → c₂ determined
+7.   Curvature condition at origin
+
+Uses Schrödinger equation for stable higher-derivative computation.
 
 # Arguments
 - `grid`: Radial grid
 - `u_ae`: All-electron wavefunction u(r)
+- `V_eff`: Effective potential (including centrifugal term)
 - `E`: Orbital eigenvalue
 - `l`: Angular momentum
 - `rc`: Cutoff radius
@@ -191,63 +254,21 @@ The 7 coefficients are determined by:
 # Returns
 - `u_ps`: Pseudo-wavefunction (equals u_ae for r > rc)
 """
-function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
-                                 l::Int, rc::Float64)
+function troullier_martins_pswf(grid, u_ae::Vector{Float64}, V_eff::Vector{Float64},
+                                 E::Float64, l::Int, rc::Float64)
     N = grid.N
     δ = grid.δ
 
     i_c = find_grid_index(grid, rc)
-    rc_actual = grid.r[i_c]
+    r_c = grid.r[i_c]
 
-    # Extract matching data at r_c from all-electron wavefunction
-    # Using 5-point stencil for derivatives
-    h = grid.δ
-
-    # Get values at matching point (using actual r values for finite difference)
-    # Note: we need derivatives with respect to r, not x
-    # For exponential grid, we need to convert
-
-    # Compute derivatives of u_ae at r_c using finite differences in r-space
-    # We'll interpolate to get u_ae and its derivatives at exactly rc
-
-    u_c = u_ae[i_c]
-    r_c = rc_actual
-
-    # Compute derivatives using 5-point stencil (in x-space, then convert)
-    # du/dr = (du/dx) / (dr/dx) = (du/dx) / rp
-
-    # For better accuracy, compute derivatives numerically
     if i_c < 3 || i_c > N - 2
         error("rc too close to grid boundary")
     end
 
-    # 5-point stencil coefficients for first derivative: (-1, 8, 0, -8, 1) / 12h
-    # For derivatives in x-space
-    du_dx = (-u_ae[i_c-2] + 8*u_ae[i_c-1] - 8*u_ae[i_c+1] + u_ae[i_c+2]) / (12 * δ)
-
-    # Second derivative: (−1, 16, −30, 16, −1) / 12h²
-    d2u_dx2 = (-u_ae[i_c-2] + 16*u_ae[i_c-1] - 30*u_ae[i_c] +
-               16*u_ae[i_c+1] - u_ae[i_c+2]) / (12 * δ^2)
-
-    # Third derivative
-    d3u_dx3 = (-u_ae[i_c-2] + 2*u_ae[i_c-1] - 2*u_ae[i_c+1] + u_ae[i_c+2]) / (2 * δ^3)
-
-    # Fourth derivative
-    d4u_dx4 = (u_ae[i_c-2] - 4*u_ae[i_c-1] + 6*u_ae[i_c] -
-               4*u_ae[i_c+1] + u_ae[i_c+2]) / δ^4
-
-    # Convert from x-derivatives to r-derivatives
-    # Using chain rule: du/dr = (du/dx) / rp
-    # d²u/dr² = (d²u/dx² - rp' * du/dx / rp) / rp²
-    # etc.
-
-    rp_c = grid.rp[i_c]
-    # rp'/rp = 1 for our grid (since rp = Rp * exp(x), rp' = rp)
-
-    du_dr = du_dx / rp_c
-    d2u_dr2 = (d2u_dx2 - du_dx) / rp_c^2
-    d3u_dr3 = (d3u_dx3 - 3*d2u_dx2 + 2*du_dx) / rp_c^3
-    d4u_dr4 = (d4u_dx4 - 6*d3u_dx3 + 11*d2u_dx2 - 6*du_dx) / rp_c^4
+    # Get derivatives using SE-based method (much more stable)
+    u_c, du_dr, d2u_dr2, d3u_dr3, d4u_dr4 = compute_derivatives_at_rc(
+        grid, u_ae, V_eff, E, l, i_c)
 
     # Compute norm of u_ae from 0 to r_c
     norm_ae_sq = 0.0
@@ -255,95 +276,28 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
         norm_ae_sq += 0.5 * δ * (u_ae[i]^2 * grid.rp[i] + u_ae[i+1]^2 * grid.rp[i+1])
     end
 
-    # Now solve for TM coefficients
-    # u_ps(r) = r^(l+1) * exp(p(r)) where p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
-    #
-    # At r = rc, we need:
-    # - u_ps = u_ae                 (value)
-    # - u_ps' = u_ae'               (first derivative)
-    # - u_ps'' = u_ae''             (second derivative)
-    # - u_ps''' = u_ae'''           (third derivative)
-    # - u_ps'''' = u_ae''''         (fourth derivative)
-    # - ∫₀^rc |u_ps|² dr = ∫₀^rc |u_ae|² dr  (norm conservation)
-    # - p''(0) = 0 → c₂ fixed by curvature condition
-
-    # For numerical stability, work with f(r) = ln(u_ps / r^(l+1)) = p(r)
-    # Then f(rc) = ln(u_c / rc^(l+1))
-    # f'(rc) = u'_c/u_c - (l+1)/rc
-    # f''(rc) = u''_c/u_c - (u'_c/u_c)² - f'(rc)/rc (from SE)
-    # etc.
-
+    # Convert to f(r) = ln(u / r^(l+1)) = p(r) and its derivatives
     f_c = log(abs(u_c) / r_c^(l+1))
+
+    # f' = u'/u - (l+1)/r
     fp_c = du_dr / u_c - (l + 1) / r_c
 
-    # From Schrödinger equation: u'' = [2(V-E) + l(l+1)/r²] u
-    # At r_c, V ≈ -Z/r + screening, but we use the actual d2u_dr2
+    # f'' = u''/u - (u'/u)² + (l+1)/r²
+    #     = u''/u - f'² - 2(l+1)f'/r - (l+1)²/r² + (l+1)/r²
+    # Simpler: f'' = (u'' - u * f'²) / u - but direct formula is cleaner
     fpp_c = d2u_dr2 / u_c - (du_dr / u_c)^2
 
+    # f''' from chain rule
     fppp_c = d3u_dr3 / u_c - 3 * (du_dr / u_c) * (d2u_dr2 / u_c) + 2 * (du_dr / u_c)^3
 
+    # f'''' from chain rule
     fpppp_c = d4u_dr4 / u_c - 4 * (du_dr / u_c) * (d3u_dr3 / u_c) -
               3 * (d2u_dr2 / u_c)^2 + 12 * (du_dr / u_c)^2 * (d2u_dr2 / u_c) -
               6 * (du_dr / u_c)^4
 
-    # Solve linear system for TM polynomial coefficients
-    # p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
-    #
-    # p'(r) = 2c₂r + 4c₄r³ + 6c₆r⁵ + 8c₈r⁷ + 10c₁₀r⁹ + 12c₁₂r¹¹
-    # p''(r) = 2c₂ + 12c₄r² + 30c₆r⁴ + 56c₈r⁶ + 90c₁₀r⁸ + 132c₁₂r¹⁰
-    # p'''(r) = 24c₄r + 120c₆r³ + 336c₈r⁵ + 720c₁₀r⁷ + 1320c₁₂r⁹
-    # p''''(r) = 24c₄ + 360c₆r² + 1680c₈r⁴ + 5040c₁₀r⁶ + 11880c₁₂r⁸
-
-    rc2 = r_c^2
-    rc4 = r_c^4
-    rc6 = r_c^6
-    rc8 = r_c^8
-    rc10 = r_c^10
-    rc12 = r_c^12
-
-    # Build matrix for matching conditions
-    # Variables: [c₀, c₂, c₄, c₆, c₈, c₁₀, c₁₂]
-    # Row 1: p(rc) = f_c
-    # Row 2: p'(rc) = fp_c
-    # Row 3: p''(rc) = fpp_c
-    # Row 4: p'''(rc) = fppp_c
-    # Row 5: p''''(rc) = fpppp_c
-    # Additional: norm conservation (nonlinear, will iterate)
-    # Constraint: p''(0) = 2c₂ = fixed value (curvature)
-
-    # Use iterative approach: guess c₀, solve linear system for other coefficients
-    # Iterate until norm conservation is satisfied
-
-    # For TM, standard approach fixes c₂ from curvature condition at origin:
-    # From SE: at r=0, screened potential behaves nicely
-    # The curvature condition ensures p''(0) = 0, meaning c₂ = 0
-    # Wait, that's not quite right. Let me reconsider.
-
-    # Actually, for TM, the curvature condition is that the screened pseudopotential
-    # V_ps,scr is finite at the origin. This constrains the polynomial.
-    # The standard approach is to:
-    # 1. Use 5 matching conditions (value + 4 derivatives) at rc
-    # 2. Add norm conservation
-    # 3. Add curvature condition (p''(0) = 0 or specific value)
-    # This gives 7 equations for 7 unknowns.
-
-    # Simpler approach: set c₂ = 0 (zero curvature at origin), then solve
-    # remaining 6 variables from 5 matching + 1 norm conservation.
-    # But that's actually overdetermined...
-
-    # Standard TM uses: p''(0) is determined by E and l via a specific formula
-    # Let's use the practical approach from literature:
-
-    # Actually the standard TM approach (Troullier & Martins, PRB 43, 1991):
-    # p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
-    # with p''(0) = 2c₂ determined by:
-    # V_ps,scr = E + (l+1)/r * p'(r) + [p'(r)² + p''(r)]/2
-    # For V_ps,scr to be finite at r=0, need c₂ = -ε/(2l+3) where ε = E eigenvalue
-    # (for l > 0; for s states it's different)
-
-    # Let's implement a simpler numerical approach: Newton iteration
-
-    c = solve_tm_coefficients(r_c, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c, norm_ae_sq, grid, i_c)
+    # Solve for TM polynomial coefficients
+    c = solve_tm_coefficients(r_c, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
+                               norm_ae_sq, grid, i_c)
 
     # Build pseudo-wavefunction
     u_ps = copy(u_ae)
@@ -353,13 +307,42 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
         u_ps[i] = r^(l+1) * exp(p)
     end
 
-    # Ensure continuity at rc (should already be satisfied, but correct any numerical error)
+    # Ensure continuity at rc (correct any numerical error)
     scale = u_ae[i_c] / u_ps[i_c]
     for i in 1:i_c
         u_ps[i] *= scale
     end
 
     return u_ps
+end
+
+# Keep old signature for backward compatibility (without V_eff)
+function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
+                                 l::Int, rc::Float64)
+    # Construct approximate V_eff from SE inversion at available points
+    # This is a fallback - prefer passing V_eff explicitly
+    N = grid.N
+    V_eff = zeros(N)
+
+    # Use SE: V = E + u''/(2u) - l(l+1)/(2r²)
+    δ = grid.δ
+    for i in 3:N-2
+        d2u_dx2 = (-u_ae[i-2] + 16*u_ae[i-1] - 30*u_ae[i] +
+                   16*u_ae[i+1] - u_ae[i+2]) / (12 * δ^2)
+        du_dx = (-u_ae[i-2] + 8*u_ae[i-1] - 8*u_ae[i+1] + u_ae[i+2]) / (12 * δ)
+        rp = grid.rp[i]
+        d2u_dr2 = (d2u_dx2 - du_dx) / rp^2
+
+        if abs(u_ae[i]) > 1e-30
+            V_eff[i] = E + 0.5 * d2u_dr2 / u_ae[i]
+        else
+            V_eff[i] = E
+        end
+    end
+    V_eff[1:2] .= V_eff[3]
+    V_eff[N-1:N] .= V_eff[N-2]
+
+    return troullier_martins_pswf(grid, u_ae, V_eff, E, l, rc)
 end
 
 """
@@ -757,6 +740,14 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
     println("Step 1: All-electron SCF...")
     ae_eigenvalues, ae_orbitals, ae_density, ae_V_eff = solve_scf(grid, Z, config)
 
+    # Compute V_base (without centrifugal) for use in TM generation
+    # V_base = V_nuc + V_H + V_xc
+    N = grid.N
+    V_nuc = -Z ./ grid.r
+    V_H = solve_poisson(grid, ae_density)
+    V_xc = [lda_pz81(ni)[1] for ni in ae_density]
+    V_base = V_nuc .+ V_H .+ V_xc
+
     println("  AE eigenvalues:")
     for (i, (n, l, occ)) in enumerate(config)
         orb_name = "$(n)$(["s","p","d","f"][l+1])"
@@ -818,10 +809,13 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
         u_ae = ae_orbitals[idx]
         rc = rc_dict[l]
 
+        # Compute V_eff for this orbital (V_base + centrifugal)
+        V_eff = V_base .+ l * (l + 1) ./ (2 .* grid.r .^ 2)
+
         orb_name = "$(n)$(["s","p","d","f"][l+1])"
         println("  Generating $orb_name pseudo-wavefunction...")
 
-        u_ps = troullier_martins_pswf(grid, u_ae, E, l, rc)
+        u_ps = troullier_martins_pswf(grid, u_ae, V_eff, E, l, rc)
 
         push!(pseudo_orbitals, PseudoOrbital(l, n, E, rc, u_ps, u_ae))
         u_ps_dict[l] = u_ps

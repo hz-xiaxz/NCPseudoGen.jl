@@ -316,3 +316,38 @@ src/
 ├── twoway.jl         # Numerov solver, SCF
 └── ncpp.jl           # NCPP generation (NEW)
 ```
+
+---
+
+## Derivative Computation Improvement (2024-12)
+
+### Problem
+Original TM implementation computed 4th derivatives using finite differences in x-space, then chain-rule conversion to r-space. This was error-prone and numerically unstable.
+
+### Solution: SE-based Derivatives
+Instead of computing high-order finite differences of u, use Schrödinger equation:
+
+```
+u'' = g(r) * u    where g(r) = 2(V - E) + l(l+1)/r²
+u''' = g' * u + g * u'
+u'''' = g'' * u + 2g' * u' + g * u''
+```
+
+This only requires:
+- First derivative of u (stable with 5-point stencil)
+- Derivatives of g = 2(V-E) + l(l+1)/r² (smooth, well-behaved)
+
+### Implementation
+Added `compute_derivatives_at_rc()` function that takes V_eff and uses SE relations.
+
+Updated `generate_ncpp()` to compute proper V_base from SCF and pass V_eff = V_base + l(l+1)/(2r²) to TM function.
+
+### Results Comparison
+| Metric | Old (FD) | New (SE-based) |
+|--------|----------|----------------|
+| Norm conservation | ~1e-14 | ~1e-14 |
+| E_KB (l=0) | -0.407 Ha | -0.369 Ha |
+| Log-deriv error (3s) | 0.236 | 0.236 |
+| Log-deriv error (3p) | 0.105 | 0.104 |
+
+Note: Log-derivative errors unchanged because TM matches u through 4th derivative, not log-derivative directly.
