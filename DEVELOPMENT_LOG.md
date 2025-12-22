@@ -351,3 +351,54 @@ Updated `generate_ncpp()` to compute proper V_base from SCF and pass V_eff = V_b
 | Log-deriv error (3p) | 0.105 | 0.104 |
 
 Note: Log-derivative errors unchanged because TM matches u through 4th derivative, not log-derivative directly.
+
+---
+
+## FiniteDifferences.jl Refactoring (2024-12)
+
+### Problem
+Manual finite difference stencils like `(-f[i-2] + 8*f[i-1] - 8*f[i+1] + f[i+2]) / (12*δ)` are:
+1. Error-prone and hard to maintain
+2. Had a **sign error** in the first derivative formula!
+
+The correct 5-point central difference for first derivative is:
+```
+f'(x) ≈ (f[x-2h] - 8*f[x-h] + 8*f[x+h] - f[x+2h]) / (12h)
+```
+
+But the original code had:
+```
+(-f[-2] + 8*f[-1] - 8*f[+1] + f[+2]) / (12δ)  # WRONG SIGN!
+```
+
+### Solution: FiniteDifferences.jl
+Replaced all manual stencils with a clean `fd_derivative()` utility that:
+- Uses `central_fdm(5, order; adapt=0)` to get optimal stencil coefficients
+- Extracts `.grid` and `.coefs` to apply stencil to discrete data
+- Avoids adaptive step estimation that can cause out-of-bounds access
+
+### Implementation
+```julia
+const _FD_D1 = central_fdm(5, 1; adapt=0)
+const _FD_D2 = central_fdm(5, 2; adapt=0)
+
+function fd_derivative(data::Vector{Float64}, i::Int, δ::Float64, order::Int=1)
+    method = order == 1 ? _FD_D1 : _FD_D2
+    g = method.grid   # [-2, -1, 0, 1, 2]
+    c = method.coefs  # coefficients
+    return sum(c[k] * data[i + Int(g[k])] for k in eachindex(g)) / δ^order
+end
+```
+
+### Results Comparison
+| Metric | Before (sign bug) | After (FiniteDifferences.jl) |
+|--------|-------------------|------------------------------|
+| E_KB (l=0) | -0.369 Ha (ghost risk) | +0.056 Ha ✓ |
+| Log-deriv error (3s) | 0.236 | 0.00012 |
+| Log-deriv error (3p) | 0.104 | 7e-10 |
+| Norm conservation | ~1e-14 | ~1e-13 |
+
+The sign error fix dramatically improved log-derivative matching and eliminated the ghost state risk (negative E_KB).
+
+### Files Changed
+- `src/ncpp.jl`: Added `fd_derivative()`, updated all FD calls

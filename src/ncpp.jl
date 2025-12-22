@@ -6,7 +6,52 @@
 # ============================================================================
 
 using LinearAlgebra
-using FiniteDifferences
+using FiniteDifferences: central_fdm
+
+# ============================================================================
+# Finite Difference Utilities
+# ============================================================================
+
+# Pre-compute FD stencils (unadapted to avoid step-size estimation that goes out of bounds)
+const _FD_D1 = central_fdm(5, 1; adapt=0)  # 5-point, 1st derivative, no adaptation
+const _FD_D2 = central_fdm(5, 2; adapt=0)  # 5-point, 2nd derivative, no adaptation
+
+"""
+    fd_derivative(data, i, δ, order=1; num_points=5)
+
+Compute derivative of discrete data using FiniteDifferences.jl stencils.
+
+Extracts coefficients from `central_fdm` and applies them directly to discrete data,
+avoiding the adaptive step estimation that can cause out-of-bounds access.
+
+# Arguments
+- `data`: Vector of discrete values sampled at uniform spacing δ
+- `i`: Index at which to compute derivative
+- `δ`: Grid spacing in x-space
+- `order`: Derivative order (default 1)
+- `num_points`: Number of stencil points (default 5)
+
+# Returns
+- Derivative value at index i
+"""
+function fd_derivative(data::Vector{Float64}, i::Int, δ::Float64, order::Int=1;
+                       num_points::Int=5)
+    method = if order == 1 && num_points == 5
+        _FD_D1
+    elseif order == 2 && num_points == 5
+        _FD_D2
+    else
+        central_fdm(num_points, order; adapt=0)
+    end
+
+    # Extract stencil grid and coefficients
+    g = method.grid   # offset grid, e.g., [-2, -1, 0, 1, 2]
+    c = method.coefs  # coefficients (for step size = 1)
+
+    # Apply stencil: f^(n)(x) ≈ Σ c_k * f[i + g_k] / δ^n
+    result = sum(c[k] * data[i + Int(g[k])] for k in eachindex(g))
+    return result / δ^order
+end
 
 # ============================================================================
 # Data Structures
@@ -193,7 +238,7 @@ function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
     u = u_ae[i_c]
 
     # First derivative using central difference (5-point stencil in x-space)
-    du_dx = (-u_ae[i_c-2] + 8*u_ae[i_c-1] - 8*u_ae[i_c+1] + u_ae[i_c+2]) / (12 * δ)
+    du_dx = fd_derivative(u_ae, i_c, δ, 1)
     rp_c = grid.rp[i_c]
     du_dr = du_dx / rp_c
 
@@ -207,12 +252,11 @@ function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
     # g'(r) = 2V'(r) - 2l(l+1)/r³
     # g''(r) = 2V''(r) + 6l(l+1)/r⁴
 
-    # Derivative of V using finite differences
-    dV_dx = (-V_eff[i_c-2] + 8*V_eff[i_c-1] - 8*V_eff[i_c+1] + V_eff[i_c+2]) / (12 * δ)
+    # Derivative of V using FiniteDifferences.jl
+    dV_dx = fd_derivative(V_eff, i_c, δ, 1)
     dV_dr = dV_dx / rp_c
 
-    d2V_dx2 = (-V_eff[i_c-2] + 16*V_eff[i_c-1] - 30*V_eff[i_c] +
-               16*V_eff[i_c+1] - V_eff[i_c+2]) / (12 * δ^2)
+    d2V_dx2 = fd_derivative(V_eff, i_c, δ, 2)
     d2V_dr2 = (d2V_dx2 - dV_dx) / rp_c^2
 
     dg_dr = 2*dV_dr - 2*l*(l+1)/r_c^3
@@ -327,9 +371,8 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
     # Use SE: V = E + u''/(2u) - l(l+1)/(2r²)
     δ = grid.δ
     for i in 3:N-2
-        d2u_dx2 = (-u_ae[i-2] + 16*u_ae[i-1] - 30*u_ae[i] +
-                   16*u_ae[i+1] - u_ae[i+2]) / (12 * δ^2)
-        du_dx = (-u_ae[i-2] + 8*u_ae[i-1] - 8*u_ae[i+1] + u_ae[i+2]) / (12 * δ)
+        d2u_dx2 = fd_derivative(u_ae, i, δ, 2)
+        du_dx = fd_derivative(u_ae, i, δ, 1)
         rp = grid.rp[i]
         d2u_dr2 = (d2u_dx2 - du_dx) / rp^2
 
@@ -487,11 +530,9 @@ function invert_schrodinger(grid, u_ps::Vector{Float64}, E::Float64, l::Int)
     for i in 3:N-2
         r = grid.r[i]
 
-        # 5-point second derivative in x-space
-        d2u_dx2 = (-u_ps[i-2] + 16*u_ps[i-1] - 30*u_ps[i] +
-                   16*u_ps[i+1] - u_ps[i+2]) / (12 * δ^2)
-
-        du_dx = (-u_ps[i-2] + 8*u_ps[i-1] - 8*u_ps[i+1] + u_ps[i+2]) / (12 * δ)
+        # Derivatives in x-space using FiniteDifferences.jl
+        d2u_dx2 = fd_derivative(u_ps, i, δ, 2)
+        du_dx = fd_derivative(u_ps, i, δ, 1)
 
         # Convert to r-derivatives
         rp = grid.rp[i]
@@ -681,10 +722,10 @@ function validate_pseudopotential(grid, pp::NormConservingPP)
         i_c = find_grid_index(grid, rc)
         δ = grid.δ
 
-        if i_c > 2 && i_c < grid.N - 1
-            # Log derivative = u'/u
-            ld_ae = (orb.u_ae[i_c+1] - orb.u_ae[i_c-1]) / (2 * δ * grid.rp[i_c]) / orb.u_ae[i_c]
-            ld_ps = (orb.u_ps[i_c+1] - orb.u_ps[i_c-1]) / (2 * δ * grid.rp[i_c]) / orb.u_ps[i_c]
+        if i_c > 2 && i_c < grid.N - 2
+            # Log derivative = u'/u = (du/dx) / (rp * u)
+            ld_ae = fd_derivative(orb.u_ae, i_c, δ, 1) / (grid.rp[i_c] * orb.u_ae[i_c])
+            ld_ps = fd_derivative(orb.u_ps, i_c, δ, 1) / (grid.rp[i_c] * orb.u_ps[i_c])
 
             err = abs(ld_ps - ld_ae)
             push!(logderiv_errors, err)
