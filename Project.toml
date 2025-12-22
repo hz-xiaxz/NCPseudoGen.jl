@@ -7,24 +7,18 @@ authors = ["xuanzhe xia <hzxiaxz@gmail.com>"]
 projects = ["test", "docs"]
 
 [deps]
-BoundaryValueDiffEq = "764a87c0-6b3e-53db-9096-fe964310641d"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
-DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
 FiniteDifferences = "26cc04aa-876d-5657-8c51-4c34ba976000"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-Roots = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
 TaylorSeries = "6aa5eb33-94cf-58f4-a9d0-e4b2c4fc25ea"
 
 [compat]
-BoundaryValueDiffEq = "5.18.0"
 CairoMakie = "0.15.8"
-DifferentialEquations = "7.17.0"
 FiniteDifferences = "0.12.33"
 ForwardDiff = "1.3.0"
 LinearAlgebra = "1.12.0"
 Printf = "1.11.0"
-Roots = "2.2.10"
 TaylorSeries = "0.20.10"
 julia = "1.10"

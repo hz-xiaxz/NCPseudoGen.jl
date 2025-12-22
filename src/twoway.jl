@@ -14,7 +14,6 @@ Using substitution y = u/sqrt(rp) transforms to:
 where F = rp² * g(r) + 1/4  (since rp'/rp = 1 and rp''/rp = 1)
 """
 
-using Roots
 
 # ============================================================================
 # Integration helper
