@@ -469,18 +469,17 @@ function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
         c_rest = A_reduced \ rhs
         c4, c6, c8, c10, c12 = c_rest
 
-        # Compute norm of pseudo-wavefunction from 0 to rc
-        # u_ps(r) = r^(l+1) * exp(p(r))
-        norm_ps_sq = 0.0
-        δ = grid.δ
+        # Compute norm using trapezoidal integration on grid (consistent with norm_ae_sq)
+        # u_ps(r) = r^(l+1) * exp(p(r)) where p(r) = c₀ + c₂r² + ...
+        # Use zero(c0) for ForwardDiff compatibility
+        norm_ps_sq = zero(c0)
         for i in 1:i_c-1
-            r1 = grid.r[i]
-            r2 = grid.r[i+1]
+            r1, r2 = grid.r[i], grid.r[i+1]
             p1 = c0 + c2*r1^2 + c4*r1^4 + c6*r1^6 + c8*r1^8 + c10*r1^10 + c12*r1^12
             p2 = c0 + c2*r2^2 + c4*r2^4 + c6*r2^6 + c8*r2^8 + c10*r2^10 + c12*r2^12
-            u1 = r1^(l+1) * exp(p1)
-            u2 = r2^(l+1) * exp(p2)
-            norm_ps_sq += 0.5 * δ * (u1^2 * grid.rp[i] + u2^2 * grid.rp[i+1])
+            u1_sq = r1^(2*(l+1)) * exp(2*p1)
+            u2_sq = r2^(2*(l+1)) * exp(2*p2)
+            norm_ps_sq += 0.5 * grid.δ * (u1_sq * grid.rp[i] + u2_sq * grid.rp[i+1])
         end
 
         return norm_ps_sq, [c0, c2, c4, c6, c8, c10, c12]
