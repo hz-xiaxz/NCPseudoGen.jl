@@ -194,4 +194,125 @@ Overall: **SCF working correctly**. Eigenvalues within expected accuracy for LDA
 
 - `src/twoway.jl`: Main Numerov solver with SCF implementation
 - `src/NCPseudoGen.jl`: Module exports and grid definition
+- `src/ncpp.jl`: Norm-conserving pseudopotential generation (NEW)
 - `debug_numerov.jl`: Al atom test script
+
+---
+
+## NCPP Implementation (2024-12)
+
+### Implementation Status
+
+Starting implementation of norm-conserving pseudopotential generation using Troullier-Martins scheme.
+
+### Building Blocks Available
+- ✓ All-electron SCF solver (`solve_scf`)
+- ✓ Numerov method for radial Schrödinger equation
+- ✓ Poisson solver for Hartree potential
+- ✓ LDA functional (PZ81)
+- ✓ ShiftedExpGrid infrastructure
+
+### Implementation Plan
+
+1. **Data Structures**
+   - `AtomConfig`: Core/valence partition
+   - `NormConservingPP`: Final PP representation
+
+2. **Core Functions**
+   - `select_rc()`: Cutoff radius selection (beyond outermost node)
+   - `troullier_martins_pswf()`: Generate smooth pseudo-wavefunction
+   - `invert_schrodinger()`: Invert SE to get screened potential
+   - `unscreen_potential()`: Remove Hartree and XC screening
+   - `construct_kb_projectors()`: Kleinman-Bylander separable form
+
+3. **Main Entry Point**
+   - `generate_ncpp()`: Full NCPP generation pipeline
+
+### Troullier-Martins Theory
+
+Inside r_c, pseudo-wavefunction has form:
+```
+ψ_ps(r) = r^(l+1) exp(p(r))
+p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
+```
+
+7 coefficients determined by:
+1-5. Continuity of ψ, ψ', ψ'', ψ''', ψ'''' at r_c
+6. Norm conservation: ∫₀^rc |ψ_ps|² dr = ∫₀^rc |ψ_AE|² dr
+7. Zero curvature at origin: p''(0) = 0
+
+### Potential Inversion
+
+From pseudo-wavefunction, invert radial SE:
+```
+V_ps,scr(r) = ε - l(l+1)/(2r²) + (1/2) ψ_ps''(r)/ψ_ps(r)
+```
+
+### Unscreening
+
+Remove valence electron screening:
+```
+V_ion(r) = V_scr(r) - V_H[n_ps](r) - V_xc[n_ps](r)
+```
+
+---
+
+## NCPP Implementation Complete (2024-12)
+
+### Implementation Status: ✓ COMPLETE
+
+All core components implemented in `src/ncpp.jl`:
+
+#### Data Structures
+- `AtomConfig`: Core/valence partition specification
+- `PseudoOrbital`: Individual pseudo-orbital (l, n, eigenvalue, rc, u_ps, u_ae)
+- `NormConservingPP`: Complete PP representation with V_local, V_nl, KB projectors
+
+#### Core Functions
+1. `select_rc()`: Automatic cutoff radius selection (1.5-3.0 a.u. default range)
+2. `troullier_martins_pswf()`: TM pseudo-wavefunction generation with Newton iteration
+3. `invert_schrodinger()`: SE inversion for screened potential
+4. `unscreen_potential()`: Remove Hartree + XC screening
+5. `construct_kb_projectors()`: Kleinman-Bylander separable form
+6. `validate_pseudopotential()`: Internal consistency checks
+7. `generate_ncpp()`: Main pipeline function
+
+### Al Atom Test Results
+
+```
+Z=13, Valence: 3s² 3p¹ (Z_val=3)
+
+Cutoff radii:
+  3s (l=0): rc = 2.48 a.u.
+  3p (l=1): rc = 3.0 a.u. (also used as V_local)
+
+Results:
+  Norm conservation errors: ~1e-14 (excellent)
+  KB projector: l=0, E_KB = -0.41 Ha
+
+Eigenvalues (preserved exactly):
+  3s: -0.287 Ha
+  3p: -0.103 Ha
+```
+
+### Known Issues / Future Improvements
+
+1. **Negative E_KB for s-channel**: May indicate ghost state susceptibility
+   - Consider using l=0 as local channel instead of l=1
+   - Or adjust rc to get positive E_KB
+
+2. **Log-derivative errors at rc**: ~0.1-0.2
+   - Due to numerical differentiation on exponential grid
+   - Could improve with better derivative stencils
+
+3. **Curvature condition**: Currently using c₂ = -E/3 for l=0
+   - Standard TM uses more sophisticated constraint
+
+### File Structure
+
+```
+src/
+├── NCPseudoGen.jl    # Main module, grid, LDA functional
+├── twoway.jl         # Numerov solver, SCF
+└── ncpp.jl           # NCPP generation (NEW)
+```

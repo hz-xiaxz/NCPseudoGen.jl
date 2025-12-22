@@ -4,6 +4,12 @@ export ShiftedExpGrid, lda_pz81
 export integrate, solve_rse_numerov, solve_poisson, solve_scf
 export calculate_safe_rmax
 
+# NCPP exports
+export AtomConfig, PseudoOrbital, NormConservingPP
+export select_rc, troullier_martins_pswf, invert_schrodinger
+export unscreen_potential, construct_kb_projectors
+export validate_pseudopotential, generate_ncpp
+
 struct ShiftedExpGrid
     N::Int
     Rp::Float64
@@ -74,5 +80,6 @@ function lda_pz81(n::Float64)
 end
 
 include("twoway.jl")
+include("ncpp.jl")
 
 end
