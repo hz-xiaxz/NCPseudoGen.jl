@@ -1,5 +1,7 @@
 module NCPseudoGen
 
+using FiniteDifferences: central_fdm
+
 export ShiftedExpGrid, lda_pz81
 export integrate, solve_rse_numerov, solve_poisson, solve_scf
 export calculate_safe_rmax
@@ -9,6 +11,31 @@ export AtomConfig, PseudoOrbital, NormConservingPP
 export select_rc, troullier_martins_pswf, invert_schrodinger
 export unscreen_potential, construct_kb_projectors
 export validate_pseudopotential, generate_ncpp
+
+# Pre-computed finite difference stencils (shared across module)
+const _FD_D1 = central_fdm(5, 1; adapt=0)  # 5-point, 1st derivative
+const _FD_D2 = central_fdm(5, 2; adapt=0)  # 5-point, 2nd derivative
+
+"""
+    fd_derivative(data, i, δ, order=1)
+
+Compute derivative of discrete data using FiniteDifferences.jl 5-point stencils.
+
+# Arguments
+- `data`: Vector of sampled values
+- `i`: Index at which to compute derivative
+- `δ`: Grid spacing (uniform in transformed x-space)
+- `order`: Derivative order (1 or 2)
+
+# Returns
+Derivative value at index i
+"""
+function fd_derivative(data::Vector{Float64}, i::Int, δ::Float64, order::Int=1)
+    method = order == 1 ? _FD_D1 : _FD_D2
+    g = method.grid   # [-2, -1, 0, 1, 2] for 5-point
+    c = method.coefs  # stencil coefficients
+    return sum(c[k] * data[i + Int(g[k])] for k in eachindex(g)) / δ^order
+end
 
 struct ShiftedExpGrid
     N::Int

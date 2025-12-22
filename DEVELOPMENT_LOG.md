@@ -478,3 +478,89 @@ This is a common and valid pattern - they complement each other.
 
 ### Files Changed
 - `src/ncpp.jl`: Import ForwardDiff, update Newton iteration
+
+---
+
+## Numerov Integration Stability Issues (2024-12)
+
+### Problem 1: Numerov Step Overflow Warning
+
+**Symptom**: Warning message "Numerov step overflow: clamping |y| > 1e100" appears during SCF.
+
+**Root Cause**: The outward Numerov integration continues beyond the classical turning point into the classically forbidden region where the wavefunction should decay exponentially. Instead, without proper boundary conditions, it grows exponentially (the "wrong" solution dominates).
+
+**Analysis**:
+- For bound states, outward integration is stable from r=0 to the turning point
+- Beyond turning point, the solution has two components: decaying (physical) and growing (unphysical)
+- Numerical errors seed the growing component, which eventually dominates
+- With r_max=20 and deep 1s (E≈-55 Ha): κ*r_max ≈ 210, far into unstable region
+
+**Current Band-Aid** (line 73 in twoway.jl):
+```julia
+if abs(y_next) > 1e100
+    y_next = sign(y_next) * 1e100  # Clamp overflow
+end
+```
+
+### Problem 2: F Clamping Corrupts Physics
+
+**Symptom**: F values are clamped to ±1e6, potentially corrupting the differential equation.
+
+**Root Cause**: At large r with deeply bound states:
+- F = rp² * g + 0.25
+- rp² ∝ r² grows quadratically
+- g = 2(V-E) + l(l+1)/r² is large when |E| is large (deep states)
+- Combined: F can exceed 1e6 at large r
+
+**Current Band-Aid** (lines 122-123, 182-183 in twoway.jl):
+```julia
+F_raw = grid.rp2[i] * g + 0.25
+F[i] = clamp(F_raw, -1e6, 1e6)
+```
+
+**Why This Is Wrong**: Clamping F changes the differential equation being solved. The resulting wavefunction is no longer a solution to the Schrödinger equation.
+
+### Proper Solution Strategy
+
+Both problems stem from integrating too far beyond where the wavefunction is physically meaningful.
+
+**Fix**: Limit integration range dynamically based on energy:
+1. **Outward integration**: Stop at matching point (classical turning point), not at i_max
+2. **Inward integration**: Already properly limited to κr < 50 (starting point)
+3. **Remove clamping**: If F would need clamping, we're integrating too far
+
+**Implementation**:
+- Compute classical turning point i_turn where V(r) = E
+- Outward: integrate from i=1 to i_turn + buffer (e.g., +20 points)
+- Match wavefunctions at i_turn
+- No need for F clamping or y overflow protection if limits are proper
+
+### Fixes Implemented (2024-12)
+
+**1. Replace overflow clamping with error**:
+Changed `numerov_step` to throw an error instead of silently clamping:
+```julia
+if abs(y_next) > 1e100
+    error("Numerov step overflow: |y| > 1e100. Grid parameters are unsuitable...")
+end
+```
+
+**2. Remove F clamping**:
+Removed the `clamp(F_raw, -1e6, 1e6)` calls in `numerov_outward!` and `numerov_inward!`.
+F is now computed directly without modification.
+
+**3. Tighten integration limits**:
+Changed `i_out_max = min(i_match + 50, N - 5)` to `i_out_max = min(i_match + 3, N - 5)`.
+Only need 3 extra points for the 5-point derivative stencil, not 50.
+
+**4. Add energy search bounds**:
+Added `E_min_bound = -500.0` in the node-guided energy search to prevent
+testing unreasonably deep energies that cause overflow.
+
+**5. Use FiniteDifferences.jl for log_deriv_mismatch**:
+Moved `fd_derivative` to main module and updated `log_deriv_mismatch` to use
+the 5-point stencil for better accuracy and maintainability.
+
+### Result
+No more overflow warnings. Code properly errors if grid parameters are wrong,
+forcing users to adjust rather than silently producing incorrect results.

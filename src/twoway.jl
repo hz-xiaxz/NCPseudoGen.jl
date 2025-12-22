@@ -68,10 +68,10 @@ y_next = [2*y_curr*(1 + 5h²F_curr/12) - y_prev*(1 - h²F_prev/12)] / (1 - h²F_
 
     y_next = (2.0 * y_curr * c_curr - y_prev * c_prev) / c_next
 
-    # Overflow protection: clamp to reasonable values
+    # Error on overflow - indicates grid parameters need adjustment
     if abs(y_next) > 1e100
-        @warn "Numerov step overflow: clamping |y| > 1e100. Consider reducing r_max or using calculate_safe_rmax()" maxlog=1
-        y_next = sign(y_next) * 1e100
+        error("Numerov step overflow: |y| > 1e100. Grid parameters are unsuitable for this calculation. " *
+              "Try reducing r_max (use calculate_safe_rmax(Z, E_deep)) or increasing N.")
     end
 
     return y_next
@@ -118,9 +118,7 @@ function numerov_outward!(u::Vector{Float64}, grid, V::Vector{Float64}, l::Int, 
     F = Vector{Float64}(undef, i_max)
     for i in 1:i_max
         g = compute_g(grid.r[i], V[i], E)
-        # Clamp F to prevent numerical instability from very large values
-        F_raw = grid.rp2[i] * g + 0.25
-        F[i] = clamp(F_raw, -1e6, 1e6)
+        F[i] = grid.rp2[i] * g + 0.25
     end
 
     # Initial conditions: u ~ r^(l+1) as r→0
@@ -178,9 +176,7 @@ function numerov_inward!(u::Vector{Float64}, grid, V::Vector{Float64}, l::Int, E
     F = Vector{Float64}(undef, N)
     for i in i_min:i_start
         g = compute_g(grid.r[i], V[i], E)
-        # Clamp F to prevent numerical instability from very large values
-        F_raw = grid.rp2[i] * g + 0.25
-        F[i] = clamp(F_raw, -1e6, 1e6)
+        F[i] = grid.rp2[i] * g + 0.25
     end
 
     y = zeros(N)
@@ -241,16 +237,23 @@ end
     log_deriv_mismatch(u_out, u_in, δ, i_match)
 
 Compute logarithmic derivative mismatch Δ = d/dx[ln(u_out)] - d/dx[ln(u_in)]
-at the matching point.
+at the matching point using FiniteDifferences.jl 5-point stencil.
 """
 function log_deriv_mismatch(u_out::Vector{Float64}, u_in::Vector{Float64}, δ::Float64, i_match::Int)
     # Scale u_in to match u_out at matching point
     scale = u_out[i_match] / u_in[i_match]
-    
-    # 5-point derivative approximation for better accuracy
-    ld_out = (u_out[i_match+1] - u_out[i_match-1]) / (2.0 * δ * u_out[i_match])
-    ld_in = scale * (u_in[i_match+1] - u_in[i_match-1]) / (2.0 * δ * u_out[i_match])
-    
+
+    # Use 5-point stencil from FiniteDifferences.jl for better accuracy
+    du_out = fd_derivative(u_out, i_match, δ, 1)
+
+    # Scale u_in for derivative calculation
+    u_in_scaled = u_in .* scale
+    du_in = fd_derivative(u_in_scaled, i_match, δ, 1)
+
+    # Log-derivative: d/dx[ln(u)] = u'/u
+    ld_out = du_out / u_out[i_match]
+    ld_in = du_in / u_in_scaled[i_match]
+
     return ld_out - ld_in
 end
 
@@ -304,10 +307,11 @@ function solve_rse_numerov(grid, V::Vector{Float64}, l::Int, E_guess::Float64;
         # Ensure minimum matching point for reliable numerics
         i_match = max(100, min(i_turn - 3, N - 10))
 
-        # Extend outward integration to cover more grid points for node counting
-        i_out_max = min(i_match + 50, N - 5)
+        # Only extend outward integration enough for 5-point derivative stencil at i_match
+        # (+2 points needed for fd_derivative which uses [-2,-1,0,1,2] stencil)
+        i_out_max = min(i_match + 3, N - 5)
         numerov_outward!(u_out, grid, V, l, E, i_out_max)
-        numerov_inward!(u_in, grid, V, l, E, max(i_match - 50, 5))
+        numerov_inward!(u_in, grid, V, l, E, max(i_match - 3, 5))
 
         # Check for numerical issues
         if !isfinite(u_out[i_match]) || abs(u_out[i_match]) < 1e-100
@@ -398,10 +402,16 @@ function solve_rse_numerov(grid, V::Vector{Float64}, l::Int, E_guess::Float64;
         else
             # nodes == target_nodes: We're at correct node count but need to find boundaries
             # Search downward (more negative) to find lower boundary
+            # Limit how deep we search to avoid numerical overflow
+            E_min_bound = -500.0  # Don't search beyond this (deeper than any atom)
             step = 0.5
             E_test = E
             for _ in 1:max_bracket_iter
-                E_test = E_test - step
+                E_test = max(E_test - step, E_min_bound)
+                if E_test <= E_min_bound
+                    E_node_lo = E_test
+                    break
+                end
                 _, n_test, _ = mismatch_and_nodes(E_test)
                 if n_test < target_nodes
                     # Found lower boundary

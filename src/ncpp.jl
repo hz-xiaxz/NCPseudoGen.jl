@@ -6,54 +6,8 @@
 # ============================================================================
 
 using LinearAlgebra
-using FiniteDifferences: central_fdm
 using TaylorSeries: Taylor1, getcoeff
 using ForwardDiff: derivative as ad_derivative
-
-# ============================================================================
-# Finite Difference Utilities
-# ============================================================================
-
-# Pre-compute FD stencils (unadapted to avoid step-size estimation that goes out of bounds)
-const _FD_D1 = central_fdm(5, 1; adapt=0)  # 5-point, 1st derivative, no adaptation
-const _FD_D2 = central_fdm(5, 2; adapt=0)  # 5-point, 2nd derivative, no adaptation
-
-"""
-    fd_derivative(data, i, δ, order=1; num_points=5)
-
-Compute derivative of discrete data using FiniteDifferences.jl stencils.
-
-Extracts coefficients from `central_fdm` and applies them directly to discrete data,
-avoiding the adaptive step estimation that can cause out-of-bounds access.
-
-# Arguments
-- `data`: Vector of discrete values sampled at uniform spacing δ
-- `i`: Index at which to compute derivative
-- `δ`: Grid spacing in x-space
-- `order`: Derivative order (default 1)
-- `num_points`: Number of stencil points (default 5)
-
-# Returns
-- Derivative value at index i
-"""
-function fd_derivative(data::Vector{Float64}, i::Int, δ::Float64, order::Int=1;
-                       num_points::Int=5)
-    method = if order == 1 && num_points == 5
-        _FD_D1
-    elseif order == 2 && num_points == 5
-        _FD_D2
-    else
-        central_fdm(num_points, order; adapt=0)
-    end
-
-    # Extract stencil grid and coefficients
-    g = method.grid   # offset grid, e.g., [-2, -1, 0, 1, 2]
-    c = method.coefs  # coefficients (for step size = 1)
-
-    # Apply stencil: f^(n)(x) ≈ Σ c_k * f[i + g_k] / δ^n
-    result = sum(c[k] * data[i + Int(g[k])] for k in eachindex(g))
-    return result / δ^order
-end
 
 # ============================================================================
 # TM Polynomial Matrix Construction (using TaylorSeries.jl)
