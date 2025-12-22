@@ -446,3 +446,35 @@ end
 
 ### Files Changed
 - `src/ncpp.jl`: Added `build_tm_matrix()`, refactored `solve_tm_coefficients()`
+
+---
+
+## ForwardDiff.jl for Newton Iteration (2024-12)
+
+### Problem
+The Newton iteration for norm conservation used numerical finite difference:
+```julia
+dc0 = 1e-6
+norm_ps_plus, _ = compute_norm(c0 + dc0, c2)
+d_norm_dc0 = (norm_ps_plus - norm_ps) / dc0  # Finite difference
+```
+
+This is less accurate and requires choosing step size ε.
+
+### Solution: ForwardDiff.jl
+Use automatic differentiation for exact derivatives:
+```julia
+using ForwardDiff: derivative as ad_derivative
+norm_of_c0 = c0_val -> compute_norm(c0_val, c2)[1]
+d_norm_dc0 = ad_derivative(norm_of_c0, c0)  # Exact to machine precision
+```
+
+### Two Differentiation Engines
+The codebase now uses two differentiation packages for different purposes:
+- **FiniteDifferences.jl**: Derivatives of discrete sampled data (u[i] on grid)
+- **ForwardDiff.jl**: Derivatives of analytical functions (Newton iteration)
+
+This is a common and valid pattern - they complement each other.
+
+### Files Changed
+- `src/ncpp.jl`: Import ForwardDiff, update Newton iteration

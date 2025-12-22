@@ -8,6 +8,7 @@
 using LinearAlgebra
 using FiniteDifferences: central_fdm
 using TaylorSeries: Taylor1, getcoeff
+using ForwardDiff: derivative as ad_derivative
 
 # ============================================================================
 # Finite Difference Utilities
@@ -489,6 +490,9 @@ function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
     c0 = f_c - c2_init * rc^2  # Initial guess
     c2 = c2_init
 
+    # Define norm as function of c0 only (for ForwardDiff)
+    norm_of_c0 = c0_val -> compute_norm(c0_val, c2)[1]
+
     tol = 1e-12
     max_iter = 50
 
@@ -500,10 +504,8 @@ function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
             return c
         end
 
-        # Numerical derivative of norm w.r.t. c₀
-        dc0 = 1e-6
-        norm_ps_plus, _ = compute_norm(c0 + dc0, c2)
-        d_norm_dc0 = (norm_ps_plus - norm_ps) / dc0
+        # Exact derivative using ForwardDiff (replaces finite difference)
+        d_norm_dc0 = ad_derivative(norm_of_c0, c0)
 
         if abs(d_norm_dc0) < 1e-20
             break
