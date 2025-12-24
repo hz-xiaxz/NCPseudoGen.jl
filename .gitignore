@@ -13,4 +13,3 @@ node_modules
 
 # Debug scripts
 debug_*.jl
-scripts/
