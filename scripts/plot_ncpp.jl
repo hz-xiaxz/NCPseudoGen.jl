@@ -27,7 +27,7 @@ config = [
 grid = ShiftedExpGrid(0.005, 1e-6, 15.0, 6000)
 
 # Generate NCPP
-pp, ae = generate_ncpp(grid, Z, config)
+const pp, ae = generate_ncpp(grid, Z, config)
 
 # =============================================================================
 # Plot 1: AE vs PS Wavefunctions
@@ -267,7 +267,7 @@ for orb in pp.orbitals
 end
 
 println("\nKB projectors:")
-for (l, (χ, E_KB)) in pp.projectors
+for (l, (_χ, E_KB)) in pp.projectors
     l_name = ["s","p","d","f"][l+1]
     @printf("  l=%d (%s): E_KB = %.4f Ha\n", l, l_name, E_KB)
 end

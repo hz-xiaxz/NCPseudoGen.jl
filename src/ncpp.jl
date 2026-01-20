@@ -39,7 +39,7 @@ function build_tm_matrix(rc::Float64, exponents::Vector{Int}, n_derivs::Int)
         r = Taylor1(Float64, n_derivs - 1)
         p = (rc + r)^n
 
-        for k in 0:n_derivs-1
+        for k = 0:n_derivs-1
             # Coefficient of r^k = f^(k)(rc) / k!
             A[k+1, j] = getcoeff(p, k) * factorial(k)
         end
@@ -123,7 +123,7 @@ end
 # ============================================================================
 
 """
-    select_rc(grid, u_ae, l; rc_min=1.5, rc_max=3.0)
+    select_rc(grid, u_ae; rc_min=1.5, rc_max=3.0)
 
 Select cutoff radius r_c for pseudopotential generation.
 
@@ -137,20 +137,23 @@ Typical values: 1.5-2.5 a.u. for most elements.
 # Arguments
 - `grid`: Radial grid
 - `u_ae`: All-electron wavefunction u(r)
-- `l`: Angular momentum
 - `rc_min`: Minimum allowed r_c (a.u.)
 - `rc_max`: Maximum allowed r_c (a.u.)
 
 # Returns
 - `rc`: Selected cutoff radius
 """
-function select_rc(grid, u_ae::Vector{Float64}, l::Int;
-                   rc_min::Float64=1.5, rc_max::Float64=3.0)
+function select_rc(
+    grid,
+    u_ae::Vector{Float64};
+    rc_min::Float64 = 1.5,
+    rc_max::Float64 = 3.0,
+)
     N = grid.N
 
     # Find outermost node
     i_last_node = 1
-    for i in 2:N-1
+    for i = 2:N-1
         if u_ae[i] * u_ae[i+1] < 0
             i_last_node = i
         end
@@ -165,7 +168,7 @@ function select_rc(grid, u_ae::Vector{Float64}, l::Int;
     # Find peak of |u| for nodeless states
     i_peak = 1
     u_max = 0.0
-    for i in 2:N-1
+    for i = 2:N-1
         if abs(u_ae[i]) > u_max
             u_max = abs(u_ae[i])
             i_peak = i
@@ -195,7 +198,7 @@ Find grid index closest to target radius.
 """
 function find_grid_index(grid, r_target::Float64)
     idx = 1
-    for i in 1:grid.N
+    for i = 1:grid.N
         if grid.r[i] >= r_target
             idx = i
             break
@@ -223,9 +226,14 @@ This only requires first derivative of u (stable) and derivatives of g (smooth).
 # Returns
 - `(u, u', u'', u''', u'''')` at r_c in r-space
 """
-function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
-                                    V_eff::Vector{Float64}, E::Float64,
-                                    l::Int, i_c::Int)
+function compute_derivatives_at_rc(
+    grid::ShiftedExpGrid,
+    u_ae::Vector{Float64},
+    V_eff::Vector{Float64},
+    E::Float64,
+    l::Int,
+    i_c::Int,
+)
     r_c = grid.r[i_c]
     δ = grid.δ
 
@@ -238,7 +246,7 @@ function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
     du_dr = du_dx / rp_c
 
     # g(r) = 2(V - E) + l(l+1)/r² from Schrödinger equation
-    g_c = 2*(V_eff[i_c] - E) + l*(l+1)/r_c^2
+    g_c = 2 * (V_eff[i_c] - E) + l * (l + 1) / r_c^2
 
     # Second derivative from SE: u'' = g * u
     d2u_dr2 = g_c * u
@@ -254,14 +262,14 @@ function compute_derivatives_at_rc(grid, u_ae::Vector{Float64},
     d2V_dx2 = fd_derivative(V_eff, i_c, δ, 2)
     d2V_dr2 = (d2V_dx2 - dV_dx) / rp_c^2
 
-    dg_dr = 2*dV_dr - 2*l*(l+1)/r_c^3
-    d2g_dr2 = 2*d2V_dr2 + 6*l*(l+1)/r_c^4
+    dg_dr = 2 * dV_dr - 2 * l * (l + 1) / r_c^3
+    d2g_dr2 = 2 * d2V_dr2 + 6 * l * (l + 1) / r_c^4
 
     # Third derivative: u''' = g' * u + g * u'
     d3u_dr3 = dg_dr * u + g_c * du_dr
 
     # Fourth derivative: u'''' = g'' * u + 2g' * u' + g * u''
-    d4u_dr4 = d2g_dr2 * u + 2*dg_dr * du_dr + g_c * d2u_dr2
+    d4u_dr4 = d2g_dr2 * u + 2 * dg_dr * du_dr + g_c * d2u_dr2
 
     return u, du_dr, d2u_dr2, d3u_dr3, d4u_dr4
 end
@@ -293,8 +301,14 @@ Uses Schrödinger equation for stable higher-derivative computation.
 # Returns
 - `u_ps`: Pseudo-wavefunction (equals u_ae for r > rc)
 """
-function troullier_martins_pswf(grid, u_ae::Vector{Float64}, V_eff::Vector{Float64},
-                                 E::Float64, l::Int, rc::Float64)
+function troullier_martins_pswf(
+    grid::ShiftedExpGrid,
+    u_ae::Vector{Float64},
+    V_eff::Vector{Float64},
+    E::Float64,
+    l::Int,
+    rc::Float64,
+)
     N = grid.N
     δ = grid.δ
 
@@ -306,17 +320,17 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, V_eff::Vector{Float
     end
 
     # Get derivatives using SE-based method (much more stable)
-    u_c, du_dr, d2u_dr2, d3u_dr3, d4u_dr4 = compute_derivatives_at_rc(
-        grid, u_ae, V_eff, E, l, i_c)
+    u_c, du_dr, d2u_dr2, d3u_dr3, d4u_dr4 =
+        compute_derivatives_at_rc(grid, u_ae, V_eff, E, l, i_c)
 
     # Compute norm of u_ae from 0 to r_c
     norm_ae_sq = 0.0
-    for i in 1:i_c-1
+    for i = 1:i_c-1
         norm_ae_sq += 0.5 * δ * (u_ae[i]^2 * grid.rp[i] + u_ae[i+1]^2 * grid.rp[i+1])
     end
 
     # Convert to f(r) = ln(u / r^(l+1)) = p(r) and its derivatives
-    f_c = log(abs(u_c) / r_c^(l+1))
+    f_c = log(abs(u_c) / r_c^(l + 1))
 
     # f' = u'/u - (l+1)/r
     fp_c = du_dr / u_c - (l + 1) / r_c
@@ -330,25 +344,37 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, V_eff::Vector{Float
     fppp_c = d3u_dr3 / u_c - 3 * (du_dr / u_c) * (d2u_dr2 / u_c) + 2 * (du_dr / u_c)^3
 
     # f'''' from chain rule
-    fpppp_c = d4u_dr4 / u_c - 4 * (du_dr / u_c) * (d3u_dr3 / u_c) -
-              3 * (d2u_dr2 / u_c)^2 + 12 * (du_dr / u_c)^2 * (d2u_dr2 / u_c) -
-              6 * (du_dr / u_c)^4
+    fpppp_c =
+        d4u_dr4 / u_c - 4 * (du_dr / u_c) * (d3u_dr3 / u_c) - 3 * (d2u_dr2 / u_c)^2 +
+        12 * (du_dr / u_c)^2 * (d2u_dr2 / u_c) - 6 * (du_dr / u_c)^4
 
     # Solve for TM polynomial coefficients
-    c = solve_tm_coefficients(r_c, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
-                               norm_ae_sq, grid, i_c)
+    c = solve_tm_coefficients(
+        r_c,
+        l,
+        E,
+        f_c,
+        fp_c,
+        fpp_c,
+        fppp_c,
+        fpppp_c,
+        norm_ae_sq,
+        grid,
+        i_c,
+    )
 
     # Build pseudo-wavefunction
     u_ps = copy(u_ae)
-    for i in 1:i_c
+    for i = 1:i_c
         r = grid.r[i]
-        p = c[1] + c[2]*r^2 + c[3]*r^4 + c[4]*r^6 + c[5]*r^8 + c[6]*r^10 + c[7]*r^12
-        u_ps[i] = r^(l+1) * exp(p)
+        # p(r) = c1 + c2*r^2 + c3*r^4 + ... + c7*r^12
+        p = evalpoly(r^2, (c[1], c[2], c[3], c[4], c[5], c[6], c[7]))
+        u_ps[i] = r^(l + 1) * exp(p)
     end
 
     # Ensure continuity at rc (correct any numerical error)
     scale = u_ae[i_c] / u_ps[i_c]
-    for i in 1:i_c
+    for i = 1:i_c
         u_ps[i] *= scale
     end
 
@@ -356,8 +382,13 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, V_eff::Vector{Float
 end
 
 # Keep old signature for backward compatibility (without V_eff)
-function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
-                                 l::Int, rc::Float64)
+function troullier_martins_pswf(
+    grid::ShiftedExpGrid,
+    u_ae::Vector{Float64},
+    E::Float64,
+    l::Int,
+    rc::Float64,
+)
     # Construct approximate V_eff from SE inversion at available points
     # This is a fallback - prefer passing V_eff explicitly
     N = grid.N
@@ -365,7 +396,7 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
 
     # Use SE: V = E + u''/(2u) - l(l+1)/(2r²)
     δ = grid.δ
-    for i in 3:N-2
+    for i = 3:N-2
         d2u_dx2 = fd_derivative(u_ae, i, δ, 2)
         du_dx = fd_derivative(u_ae, i, δ, 1)
         rp = grid.rp[i]
@@ -383,6 +414,54 @@ function troullier_martins_pswf(grid, u_ae::Vector{Float64}, E::Float64,
     return troullier_martins_pswf(grid, u_ae, V_eff, E, l, rc)
 end
 
+# 1. The Kernel Function (Function Barrier)
+# This handles the heavy lifting. By separating it, we ensure type stability
+# for `c0` (which can be Float64 or a Dual number).
+function _tm_norm_kernel(c0, c2, l, i_c, grid, A_fact, col_c0, col_c2, rhs_fixed)
+    # Calculate the RHS vector. 
+    # Since c0/c2 might be Dual numbers, Julia handles the type promotion automatically here.
+    rhs = rhs_fixed .- c0 .* col_c0 .- c2 .* col_c2
+
+    # Solve linear system using the pre-computed LU factorization.
+    # Much faster than A \ rhs inside a loop.
+    c_rest = A_fact \ rhs
+    c4, c6, c8, c10, c12 = c_rest
+
+    # Create a tuple of coefficients for evalpoly. 
+    # Tuples are stack-allocated and very fast.
+    coeffs = (c0, c2, c4, c6, c8, c10, c12)
+
+    norm_ps_sq = zero(c0) # Initialize accumulator with correct type (Float64 or Dual)
+
+    for i = 1:i_c-1
+        r1 = grid.r[i]
+        r2 = grid.r[i+1]
+
+        # OPTIMIZATION: Use evalpoly with r^2
+        # This replaces: c0 + c2*r1^2 + c4*r1^4 ...
+        # evalpoly uses Horner's method + FMA, which is faster and more precise.
+        r1_sq = r1^2
+        r2_sq = r2^2
+
+        p1 = evalpoly(r1_sq, coeffs)
+        p2 = evalpoly(r2_sq, coeffs)
+
+        # Calculate wave functions
+        # r^(2*(l+1)) can be heavy. If l is constant, integer powers are fast.
+        u1_sq = r1^(2 * (l + 1)) * exp(2 * p1)
+        u2_sq = r2^(2 * (l + 1)) * exp(2 * p2)
+
+        # Trapezoidal integration
+        # muladd can be explicitly used here for the accumulation if desired, 
+        # but the compiler is usually smart enough here.
+        term = u1_sq * grid.rp[i] + u2_sq * grid.rp[i+1]
+        norm_ps_sq += 0.5 * grid.δ * term
+    end
+
+    # Return both the norm and the full coefficient list
+    return norm_ps_sq, [c0, c2, c4, c6, c8, c10, c12]
+end
+
 """
     solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c, norm_ae_sq, grid, i_c)
 
@@ -390,86 +469,94 @@ Solve for TM polynomial coefficients using Newton iteration.
 
 Uses TaylorSeries.jl for automatic derivative computation of the matching matrix.
 """
-function solve_tm_coefficients(rc, l, E, f_c, fp_c, fpp_c, fppp_c, fpppp_c,
-                                norm_ae_sq, grid, i_c)
-    # For s-states (l=0): p''(0) ≈ -E/3 for finite V at origin
-    # For l>0: p''(0) = 0 is often used
+function solve_tm_coefficients(
+    rc,
+    l,
+    E,
+    f_c,
+    fp_c,
+    fpp_c,
+    fppp_c,
+    fpppp_c,
+    norm_ae_sq,
+    grid,
+    i_c,
+)
     if l == 0
         c2_init = -E / 3.0
     else
         c2_init = 0.0
     end
 
-    # Build full matching matrix using TaylorSeries.jl
-    # TM polynomial: p(r) = c₀ + c₂r² + c₄r⁴ + c₆r⁶ + c₈r⁸ + c₁₀r¹⁰ + c₁₂r¹²
+    # Setup matrix structure
     exponents = [0, 2, 4, 6, 8, 10, 12]
-    A_full = build_tm_matrix(rc, exponents, 5)  # 5 derivatives (p through p'''')
+    A_full = build_tm_matrix(rc, exponents, 5)
 
-    # Matching conditions: p(rc)=f_c, p'(rc)=fp_c, etc.
-    # We fix c₂ and solve for [c₀, c₄, c₆, c₈, c₁₀, c₁₂]
+    # --- Pre-computation Phase ---
+    # We extract constants here to avoid array slicing/allocation inside the Newton loop
 
-    # Extract submatrix: columns for [c₀, c₄, c₆, c₈, c₁₀, c₁₂] (indices 1,3,4,5,6,7)
-    # But we use Newton iteration on c₀ for norm conservation
+    col_c0 = A_full[:, 1] # Column for c0
+    col_c2 = A_full[:, 2] # Column for c2
+    rhs_fixed = [f_c, fp_c, fpp_c, fppp_c, fpppp_c]
 
-    # Column for c₂ contributions
-    c2_col = A_full[:, 2]  # derivatives of r² at rc
+    # LU Decomposition
+    # We factorize the submatrix for [c4...c12] ONCE.
+    # Inside the loop, we simply do back-substitution (O(N^2) instead of O(N^3)).
+    A_reduced = A_full[:, 3:7]
+    A_fact = lu(A_reduced)
 
-    function compute_norm(c0, c2)
-        # RHS after subtracting c₀ and c₂ contributions
-        rhs = [f_c, fp_c, fpp_c, fppp_c, fpppp_c] .- c0 .* A_full[:, 1] .- c2 .* c2_col
-
-        # Solve for [c₄, c₆, c₈, c₁₀, c₁₂] using columns 3-7
-        A_reduced = A_full[:, 3:7]
-        c_rest = A_reduced \ rhs
-        c4, c6, c8, c10, c12 = c_rest
-
-        # Compute norm using trapezoidal integration on grid (consistent with norm_ae_sq)
-        # u_ps(r) = r^(l+1) * exp(p(r)) where p(r) = c₀ + c₂r² + ...
-        # Use zero(c0) for ForwardDiff compatibility
-        norm_ps_sq = zero(c0)
-        for i in 1:i_c-1
-            r1, r2 = grid.r[i], grid.r[i+1]
-            p1 = c0 + c2*r1^2 + c4*r1^4 + c6*r1^6 + c8*r1^8 + c10*r1^10 + c12*r1^12
-            p2 = c0 + c2*r2^2 + c4*r2^4 + c6*r2^6 + c8*r2^8 + c10*r2^10 + c12*r2^12
-            u1_sq = r1^(2*(l+1)) * exp(2*p1)
-            u2_sq = r2^(2*(l+1)) * exp(2*p2)
-            norm_ps_sq += 0.5 * grid.δ * (u1_sq * grid.rp[i] + u2_sq * grid.rp[i+1])
-        end
-
-        return norm_ps_sq, [c0, c2, c4, c6, c8, c10, c12]
-    end
-
-    # Newton iteration on c₀ to satisfy norm conservation
-    c0 = f_c - c2_init * rc^2  # Initial guess
+    # Initial guesses
+    c0 = f_c - c2_init * rc^2
     c2 = c2_init
 
-    # Define norm as function of c0 only (for ForwardDiff)
-    norm_of_c0 = c0_val -> compute_norm(c0_val, c2)[1]
+    # Define a lightweight wrapper for ForwardDiff.
+    # Because we pass all heavy data (A_fact, grid) as arguments,
+    # we avoid the "Core.Box" performance pitfall caused by capturing variables.
+    get_norm_val =
+        (c0_val) -> begin
+            val, _ = _tm_norm_kernel(
+                c0_val,
+                c2,
+                l,
+                i_c,
+                grid,
+                A_fact,
+                col_c0,
+                col_c2,
+                rhs_fixed,
+            )
+            return val
+        end
 
     tol = 1e-12
     max_iter = 50
 
-    for iter in 1:max_iter
-        norm_ps, c = compute_norm(c0, c2)
+    for _ = 1:max_iter
+        # Calculate current norm and coefficients
+        norm_ps, c_all =
+            _tm_norm_kernel(c0, c2, l, i_c, grid, A_fact, col_c0, col_c2, rhs_fixed)
+
         delta_norm = norm_ps - norm_ae_sq
 
         if abs(delta_norm) < tol * norm_ae_sq
-            return c
+            return c_all
         end
 
-        # Exact derivative using ForwardDiff (replaces finite difference)
-        d_norm_dc0 = ad_derivative(norm_of_c0, c0)
+        # Calculate derivative using ForwardDiff
+        # The kernel is now type-stable, so this will be very fast.
+        d_norm_dc0 = ad_derivative(get_norm_val, c0)
 
         if abs(d_norm_dc0) < 1e-20
+            # println("Warning: Derivative vanished at iteration $iter")
             break
         end
 
         c0 -= delta_norm / d_norm_dc0
     end
 
-    # Return best guess even if not fully converged
-    _, c = compute_norm(c0, c2)
-    return c
+    # Return final result
+    _, c_final = _tm_norm_kernel(c0, c2, l, i_c, grid, A_fact, col_c0, col_c2, rhs_fixed)
+    return c_final
 end
 
 # ============================================================================
@@ -504,7 +591,7 @@ function invert_schrodinger(grid, u_ps::Vector{Float64}, E::Float64, l::Int)
     # Compute V_scr = E - l(l+1)/(2r²) + (1/2) u''/u
     # Using numerical second derivative
 
-    for i in 3:N-2
+    for i = 3:N-2
         r = grid.r[i]
 
         # Derivatives in x-space using FiniteDifferences.jl
@@ -520,7 +607,7 @@ function invert_schrodinger(grid, u_ps::Vector{Float64}, E::Float64, l::Int)
         # V = E + u''/(2u) - l(l+1)/(2r²)
 
         if abs(u_ps[i]) > 1e-30
-            V_scr[i] = E + 0.5 * d2u_dr2 / u_ps[i] - l*(l+1) / (2*r^2)
+            V_scr[i] = E + 0.5 * d2u_dr2 / u_ps[i] - l * (l + 1) / (2 * r^2)
         else
             V_scr[i] = E  # Fallback for very small wavefunction
         end
@@ -560,7 +647,7 @@ function unscreen_potential(grid, V_scr::Vector{Float64}, n_val::Vector{Float64}
 
     # Compute XC potential from valence density
     V_xc = zeros(N)
-    for i in 1:N
+    for i = 1:N
         V_xc[i], _ = lda_pz81(n_val[i])
     end
 
@@ -595,9 +682,12 @@ Separable form: V_nl = Σ_l |χ_l⟩⟨χ_l| / E_KB_l
 # Returns
 - `projectors`: KB projectors {l => (χ, E_KB)}
 """
-function construct_kb_projectors(grid, V_local::Vector{Float64},
-                                  V_nl::Dict{Int,Vector{Float64}},
-                                  u_ps_dict::Dict{Int,Vector{Float64}})
+function construct_kb_projectors(
+    grid::ShiftedExpGrid,
+    V_local::Vector{Float64},
+    V_nl::Dict{Int,Vector{Float64}},
+    u_ps_dict::Dict{Int,Vector{Float64}},
+)
     projectors = Dict{Int,Tuple{Vector{Float64},Float64}}()
 
     for (l, V_l) in V_nl
@@ -657,7 +747,7 @@ function validate_pseudopotential(grid, pp::NormConservingPP)
     # Since PS orbitals are constructed to have same eigenvalue as AE,
     # we check that the stored eigenvalue matches
     eig_errors = Float64[]
-    for orb in pp.orbitals
+    for _orb in pp.orbitals
         # Eigenvalue is by construction same as AE reference
         # Just report zero error (eigenvalue is preserved exactly in TM scheme)
         push!(eig_errors, 0.0)
@@ -666,22 +756,22 @@ function validate_pseudopotential(grid, pp::NormConservingPP)
 
     # Test 2: Norm conservation
     norm_errors = Float64[]
-    for (i, orb) in enumerate(pp.orbitals)
+    for orb in pp.orbitals
         rc = orb.rc
         i_c = find_grid_index(grid, rc)
 
         # Norm of AE inside rc
         norm_ae = 0.0
-        for j in 1:i_c-1
-            norm_ae += 0.5 * grid.δ * (orb.u_ae[j]^2 * grid.rp[j] +
-                                        orb.u_ae[j+1]^2 * grid.rp[j+1])
+        for j = 1:i_c-1
+            norm_ae +=
+                0.5 * grid.δ * (orb.u_ae[j]^2 * grid.rp[j] + orb.u_ae[j+1]^2 * grid.rp[j+1])
         end
 
         # Norm of PS inside rc
         norm_ps = 0.0
-        for j in 1:i_c-1
-            norm_ps += 0.5 * grid.δ * (orb.u_ps[j]^2 * grid.rp[j] +
-                                        orb.u_ps[j+1]^2 * grid.rp[j+1])
+        for j = 1:i_c-1
+            norm_ps +=
+                0.5 * grid.δ * (orb.u_ps[j]^2 * grid.rp[j] + orb.u_ps[j+1]^2 * grid.rp[j+1])
         end
 
         err = abs(norm_ps - norm_ae)
@@ -694,7 +784,7 @@ function validate_pseudopotential(grid, pp::NormConservingPP)
 
     # Test 3: Log-derivative matching at rc
     logderiv_errors = Float64[]
-    for (i, orb) in enumerate(pp.orbitals)
+    for orb in pp.orbitals
         rc = orb.rc
         i_c = find_grid_index(grid, rc)
         δ = grid.δ
@@ -712,7 +802,7 @@ function validate_pseudopotential(grid, pp::NormConservingPP)
 
     # Test 4: Ghost state check (simplified - check for negative KB energies)
     ghost_channels = Int[]
-    for (l, (χ, E_KB)) in pp.projectors
+    for (l, (_, E_KB)) in pp.projectors
         if E_KB < 0
             push!(ghost_channels, l)
         end
@@ -747,10 +837,14 @@ Generate norm-conserving pseudopotential using Troullier-Martins scheme.
 - `pp`: NormConservingPP object
 - `ae_results`: All-electron SCF results for reference
 """
-function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
-                        core_config::Union{Vector{Tuple{Int,Int,Float64}},Nothing}=nothing,
-                        rc_dict::Union{Dict{Int,Float64},Nothing}=nothing,
-                        l_local::Union{Int,Nothing}=nothing)
+function generate_ncpp(
+    grid,
+    Z::Float64,
+    config::Vector{Tuple{Int,Int,Float64}};
+    core_config::Union{Vector{Tuple{Int,Int,Float64}},Nothing} = nothing,
+    rc_dict::Union{Dict{Int,Float64},Nothing} = nothing,
+    l_local::Union{Int,Nothing} = nothing,
+)
 
     println("=== Generating NCPP for Z=$Z ===")
 
@@ -760,25 +854,28 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
 
     # Compute V_base (without centrifugal) for use in TM generation
     # V_base = V_nuc + V_H + V_xc
-    N = grid.N
     V_nuc = -Z ./ grid.r
     V_H = solve_poisson(grid, ae_density)
     V_xc = [lda_pz81(ni)[1] for ni in ae_density]
     V_base = V_nuc .+ V_H .+ V_xc
 
     println("  AE eigenvalues:")
-    for (i, (n, l, occ)) in enumerate(config)
+    for (i, (n, l, _occ)) in enumerate(config)
         orb_name = "$(n)$(["s","p","d","f"][l+1])"
         println("    $orb_name: $(ae_eigenvalues[i]) Ha")
     end
 
     # Step 2: Determine core/valence partition
-    if core_config === nothing
-        # Auto-detect: use outermost shells of each l as valence
-        core_config, valence_config = auto_partition_config(config)
-    else
-        valence_config = filter(x -> !(x in core_config), config)
+    new_core_config, valence_config = let core_config = core_config
+        if core_config === nothing
+            auto_partition_config(config)
+        else
+            current_valence = filter(x -> !(x in core_config), config)
+            (core_config, current_valence)
+        end
     end
+
+    core_config = new_core_config
 
     println("\nStep 2: Core/valence partition")
     println("  Core: ", core_config)
@@ -803,9 +900,9 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
     if rc_dict === nothing
         rc_dict = Dict{Int,Float64}()
         for (idx, vc) in zip(valence_indices, valence_config)
-            n, l, occ = vc
+            n, l, _ = vc
             u_ae = ae_orbitals[idx]
-            rc = select_rc(grid, u_ae, l)
+            rc = select_rc(grid, u_ae)
             rc_dict[l] = rc
             orb_name = "$(n)$(["s","p","d","f"][l+1])"
             println("    $orb_name (l=$l): rc = $rc a.u.")
@@ -822,7 +919,7 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
     u_ps_dict = Dict{Int,Vector{Float64}}()
 
     for (idx, vc) in zip(valence_indices, valence_config)
-        n, l, occ = vc
+        n, l, _ = vc
         E = ae_eigenvalues[idx]
         u_ae = ae_orbitals[idx]
         rc = rc_dict[l]
@@ -854,8 +951,8 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
 
     # Valence density from pseudo-wavefunctions
     n_val = zeros(grid.N)
-    for (idx, vc) in zip(valence_indices, valence_config)
-        n, l, occ = vc
+    for (_idx, vc) in zip(valence_indices, valence_config)
+        _n, l, occ = vc
         u_ps = u_ps_dict[l]
         n_val .+= occ .* (u_ps .^ 2) ./ (4π .* grid.r .^ 2)
     end
@@ -879,13 +976,20 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
     # Build KB projectors for non-local channels
     projectors = construct_kb_projectors(grid, V_local, V_ion_dict, u_ps_dict)
 
-    for (l, (χ, E_KB)) in projectors
+    for (l, (_χ, E_KB)) in projectors
         println("  l=$l: E_KB = $E_KB Ha")
     end
 
     # Step 8: Create PP object
     pp = NormConservingPP(
-        Z, Z_val, grid, pseudo_orbitals, V_local, V_ion_dict, projectors, nothing
+        Z,
+        Z_val,
+        grid,
+        pseudo_orbitals,
+        V_local,
+        V_ion_dict,
+        projectors,
+        nothing,
     )
 
     # Step 9: Validation
@@ -899,8 +1003,12 @@ function generate_ncpp(grid, Z::Float64, config::Vector{Tuple{Int,Int,Float64}};
     end
     println("  Valid: $is_valid")
 
-    ae_results = (eigenvalues=ae_eigenvalues, orbitals=ae_orbitals,
-                  density=ae_density, V_eff=ae_V_eff)
+    ae_results = (
+        eigenvalues = ae_eigenvalues,
+        orbitals = ae_orbitals,
+        density = ae_density,
+        V_eff = ae_V_eff,
+    )
 
     println("\n=== NCPP generation complete ===")
 
@@ -916,7 +1024,7 @@ Uses highest n for each l as valence.
 function auto_partition_config(config::Vector{Tuple{Int,Int,Float64}})
     # Group by l, find maximum n for each l
     l_to_max_n = Dict{Int,Int}()
-    for (n, l, occ) in config
+    for (n, l, _occ) in config
         if !haskey(l_to_max_n, l) || n > l_to_max_n[l]
             l_to_max_n[l] = n
         end
